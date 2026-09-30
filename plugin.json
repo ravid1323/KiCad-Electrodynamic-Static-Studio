@@ -1,0 +1,28 @@
+{
+	"$schema": "https://go.kicad.org/api/schemas/v1",
+	"identifier": "com.sim.em_studio",
+	"name": "KiCad Electrodynamic & Static Studio",
+	"description": "Full Electrodynamic and Static extraction of the PCB for high-speed design",
+	"runtime": {
+		"type": "python",
+		"min_version": "3.9"
+	},
+	"actions": [
+		{
+			"identifier": "em-sim-run",
+			"name": "KiCad Electrodynamic & Static Studio",
+			"description": "Run KiCad Electrodynamic & Static Studio",
+			"show-button": true,
+			"scopes": ["pcb"],
+			"entrypoint": "em_sim_plugin.py",
+			"icons-light": [
+				"resources/icon_24x24.png",
+				"resources/icon_48x48.png"
+			],
+			"icons-dark": [
+				"resources/icon_24x24.png",
+				"resources/icon_48x48.png"
+			]
+		}	
+	]
+}

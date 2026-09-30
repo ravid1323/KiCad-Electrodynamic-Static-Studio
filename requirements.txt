@@ -1,0 +1,13 @@
+kicad-python>=0.6.0
+wxPython~=4.2
+shapely>=2.0.0
+fastapi
+uvicorn
+requests
+numpy
+scikit-rf
+matplotlib
+pyvista
+sympy
+python-pptx
+signal

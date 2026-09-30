@@ -1,0 +1,21 @@
+# Python caches
+__pycache__/
+*.pyc
+
+# FDTD and DC Simulation Output Folders
+em_simulation_results*/
+fdtd_results/
+dc_results/
+
+# Simulation Data and Temporary Files
+*.xml
+*.vtk
+*.vtr
+*.h5
+*.s*p
+simulation_metadata.json
+sim_status.json
+server_config.json
+
+# Logs
+*.log
