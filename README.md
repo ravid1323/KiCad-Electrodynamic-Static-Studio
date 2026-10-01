@@ -145,12 +145,13 @@ Key Features & Workflow:
 ---
 
 ## Screenshots
-![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/net_list_select.png))
-![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/stackup_sync.png.png))
-![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/sim_setting.png))
-![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/mesh_setting.png))
-![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/component_manager.png))
-![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/port_config.png))
-![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/dc_network_config.png))
-![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/post_processing.png))
-![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/report_generator.png))
+
+![Net List Select](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/net_list_select.png)
+![Stackup Sync](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/stackup_sync.png.png)
+![Sim Setting](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/sim_setting.png)
+![Mesh Setting](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/mesh_setting.png)
+![Component Manager](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/component_manager.png)
+![Port Config](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/port_config.png)
+![DC Network Config](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/dc_network_config.png)
+![Post Processing](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/post_processing.png)
+![Report Generator](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/report_generator.png)
