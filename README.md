@@ -147,7 +147,7 @@ Key Features & Workflow:
 ## Screenshots
 
 ![Net List Select](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/net_list_select.png)
-![Stackup Sync](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/stackup_sync.png.png)
+![Stackup Sync](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/stackup_sync.png)
 ![Sim Setting](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/sim_setting.png)
 ![Mesh Setting](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/mesh_setting.png)
 ![Component Manager](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/main/Screenshots/component_manager.png)
