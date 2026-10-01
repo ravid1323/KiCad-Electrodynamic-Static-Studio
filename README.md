@@ -91,20 +91,25 @@ To run the Simulation Studio, the following system and Python dependencies are r
 
 
 2. Create a folder called `em_sim_studio` and clone the git in the folder
+   for installing only the plugin:
    ```bash
-    git clone https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio.git
+    git clone [https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio.git](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio.git)
     ```
-3. KiCad will automatically scan this directory on startup to map your toolbar icon to the UI.
+   for installing the plugin alongside the examples:
+   ```bash
+    git clone --recurse-submodules [https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio.git](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio.git)
+    ```
+4. KiCad will automatically scan this directory on startup to map your toolbar icon to the UI.
 
 
-4. Open KiCad, go to **Preferences > Plugins**, and ensure the **IPC API server** is enabled.
-5. Install the necessary Python dependencies into the environment KiCad uses.
+5. Open KiCad, go to **Preferences > Plugins**, and ensure the **IPC API server** is enabled.
+6. Install the necessary Python dependencies into the environment KiCad uses.
    ```bash
     python -m pip install -r requirements.txt
     pip3 install -r requirements.txt
     wsl pip3 install -r requirements.txt
     ```
-6. Restart KiCad.
+7. Restart KiCad.
 
 ---
 
