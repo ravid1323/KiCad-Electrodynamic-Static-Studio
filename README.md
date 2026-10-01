@@ -1,5 +1,5 @@
 # KiCad Electrodynamic & Static Studio
-![Icon]([https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio/tree/main/resources/icon_big.png](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio/refs/heads/main/resources/icon_big.png))
+![Icon](https://raw.githubusercontent.com/ravid1323/KiCad-Electrodynamic-Static-Studio/refs/heads/main/resources/icon_big.png)
 
 A modular Python-based plugin natively integrated into KiCad via the `kipy` IPC API. This toolchain bridges KiCad's PCB Editor with the openEMS FDTD engine and a custom C++ Modified Nodal Analysis (MNA) solver, allowing engineers to perform rigorous electrodynamic (AC/RF) and static (DC IR-drop) analyses without leaving their EDA environment.
 
