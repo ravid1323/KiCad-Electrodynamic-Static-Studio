@@ -1,0 +1,3 @@
+[submodule "examples"]
+	path = examples
+	url = https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples.git
