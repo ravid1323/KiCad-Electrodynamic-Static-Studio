@@ -141,3 +141,16 @@ Key Features & Workflow:
 3. Smart Template Formatting: Click "Generate PPTX Report" to automatically build the presentation using the resources/template.pptx file.   
 4. Dynamic Metadata: The generator automatically populates the main title slide with your KiCad project name, the exact timestamp of generation.   
 5. Auto-Centering: Each queued image is given its own dedicated slide and mathematically centered for a clean, uniform layout.
+
+---
+
+## Screenshots
+![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/net_list_select.png))
+![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/stackup_sync.png.png))
+![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/sim_setting.png))
+![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/mesh_setting.png))
+![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/component_manager.png))
+![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/port_config.png))
+![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/dc_network_config.png))
+![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/post_processing.png))
+![description]([https://site.com/image.png](https://github.com/ravid1323/KiCad-Electrodynamic-Static-Studio-Examples/blob/main/Screenshots/report_generator.png))
