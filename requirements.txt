@@ -5,6 +5,7 @@ fastapi
 uvicorn
 requests
 numpy
+scipy
 scikit-rf
 matplotlib
 pyvista

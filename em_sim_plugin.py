@@ -150,6 +150,9 @@ class PortConfigDialog(wx.Dialog):
         hbox_msl.Add(wx.StaticText(self, label="Meas Shift:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 2)
         self.tc_meas = wx.TextCtrl(self, value=str(self.port_data.get("meas_plane_shift", "16.67")))
         hbox_msl.Add(self.tc_meas, 1, wx.EXPAND)
+        hbox_msl.Add(wx.StaticText(self, label="CPW Gap:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 2)
+        self.tc_cpw_gap = wx.TextCtrl(self, value=str(self.port_data.get("cpw_gap", "0.25")))
+        hbox_msl.Add(self.tc_cpw_gap, 1, wx.EXPAND)
         main_sizer.Add(hbox_msl, 0, wx.EXPAND | wx.ALL, 10)
 
         # OK / Cancel Buttons
@@ -209,6 +212,7 @@ class PortConfigDialog(wx.Dialog):
             "msl_length": safe_float(self.tc_msl_len.GetValue(), 50.0),
             "feed_shift": safe_float(self.tc_feed.GetValue(), 4.48),
             "meas_plane_shift": safe_float(self.tc_meas.GetValue(), 16.67),
+            "cpw_gap": safe_float(self.tc_cpw_gap.GetValue(), 0.25),
             "mode": self.combo_port_mode.GetStringSelection(),
             "signal_layer": self.cb_signal_layer.GetValue(),
             "reference_layer": self.cb_ref_layer.GetValue(),
@@ -2597,7 +2601,7 @@ class SimSettingsTab(wx.Panel):
         # --- Convergence Criteria ---
         conv_box = wx.StaticBox(self, label=" Convergence Criteria ")
         conv_sizer = wx.StaticBoxSizer(conv_box, wx.VERTICAL)
-        grid_conv = wx.FlexGridSizer(2, 2, 8, 12)
+        grid_conv = wx.FlexGridSizer(0, 2, 8, 12)
 
         grid_conv.Add(wx.StaticText(conv_box, label="Energy Limit Target (dB):"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.cmb_energy_limit = wx.TextCtrl(conv_box, value="-40.0")
@@ -2607,6 +2611,19 @@ class SimSettingsTab(wx.Panel):
         grid_conv.Add(wx.StaticText(conv_box, label="Max Timesteps Limit:"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.txt_max_timesteps = wx.TextCtrl(conv_box, value="100000")
         grid_conv.Add(self.txt_max_timesteps, 0, wx.EXPAND)
+
+        # --- AR Filter UI ---
+        self.chk_ar_filter = wx.CheckBox(conv_box, label="Use AR Filter (Fix 0Hz Drop)")
+        self.chk_ar_filter.SetValue(False)
+        self.chk_ar_filter.SetToolTip(
+            "Extrapolates the time-domain signal to infinity to calculate an accurate 0Hz/DC response.")
+        grid_conv.Add(self.chk_ar_filter, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        hbox_ar = wx.BoxSizer(wx.HORIZONTAL)
+        hbox_ar.Add(wx.StaticText(conv_box, label="AR Extrap. Steps:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.txt_ar_steps = wx.TextCtrl(conv_box, value="100000")
+        hbox_ar.Add(self.txt_ar_steps, 1, wx.EXPAND)
+        grid_conv.Add(hbox_ar, 0, wx.EXPAND)
 
         grid_conv.AddGrowableCol(1, 1)
         conv_sizer.Add(grid_conv, 1, wx.EXPAND | wx.ALL, 5)
@@ -2741,6 +2758,8 @@ class SimSettingsTab(wx.Panel):
             "f_num_points": int(self.txt_num_points.GetValue()),
             "energy_limit_db": float(self.cmb_energy_limit.GetValue()),
             "max_timesteps": int(self.txt_max_timesteps.GetValue()),
+            "use_ar_filter": self.chk_ar_filter.IsChecked(),
+            "ar_extrap_steps": int(self.txt_ar_steps.GetValue()) if self.txt_ar_steps.GetValue().isdigit() else 100000,
             "pml_cells": int(self.txt_pml_cells.GetValue()),
             "boundary_conditions": {
                 "x_neg": self.cmb_bc_x_neg.GetValue(),
@@ -2905,8 +2924,27 @@ class MeshSettingsTab(wx.Panel):
         feat_sizer.Add(grid_feat, 1, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(feat_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
-        # --- 4. Geometry Preservation ---
-        geom_box = wx.StaticBox(self, label=" 4. Geometry Preservation (Hard Constraints) ")
+        # --- 4. Diagonal Trace Resolution ---
+        diag_box = wx.StaticBox(self, label=" 4. Diagonal Trace Resolution ")
+        diag_sizer = wx.StaticBoxSizer(diag_box, wx.VERTICAL)
+
+        self.chk_mesh_diagonals = wx.CheckBox(diag_box, label="Force Dense Mesh on Diagonal Traces")
+        self.chk_mesh_diagonals.SetValue(True)
+        self.chk_mesh_diagonals.SetToolTip("Uncheck to rely entirely on the Global Background Mesh (faster).")
+        diag_sizer.Add(self.chk_mesh_diagonals, 0, wx.ALL, 5)
+
+        hbox_diag = wx.BoxSizer(wx.HORIZONTAL)
+        hbox_diag.Add(wx.StaticText(diag_box, label="Diagonal Cells per Trace Width:"), 0,
+                      wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.txt_trace_cells = wx.TextCtrl(diag_box, value="1")
+        self.txt_trace_cells.SetToolTip("1 is usually enough to connect the staircase. 3+ will cause overmeshing.")
+        hbox_diag.Add(self.txt_trace_cells, 0, wx.EXPAND)
+        diag_sizer.Add(hbox_diag, 0, wx.EXPAND | wx.ALL, 5)
+
+        main_sizer.Add(diag_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # --- 5. Geometry Preservation ---
+        geom_box = wx.StaticBox(self, label=" 5. Geometry Preservation (Hard Constraints) ")
         geom_sizer = wx.StaticBoxSizer(geom_box, wx.VERTICAL)
 
         self.chk_cond = wx.CheckBox(geom_box, label="Lock Conductor boundaries")
@@ -3014,6 +3052,7 @@ class MeshSettingsTab(wx.Panel):
                 "z_pos": safe_float(self.txt_margin_z_pos.GetValue(), 4.0)
             },
             "min_cell_size_mm": float(self.txt_min_cell.GetValue()),
+            "mesh_diagonal_traces": self.chk_mesh_diagonals.IsChecked(),
             "mesh_global": {
                 "x": {"max_size": float(self.txt_global_x.GetValue()), "growth": self.cmb_growth_x.GetValue(),
                       "ratio": float(self.txt_ratio_x.GetValue())},
@@ -3025,7 +3064,8 @@ class MeshSettingsTab(wx.Panel):
             "mesh_feature": {
                 "x_cells": int(self.txt_feat_x.GetValue()),
                 "y_cells": int(self.txt_feat_y.GetValue()),
-                "z_cells": int(self.txt_feat_z.GetValue())
+                "z_cells": int(self.txt_feat_z.GetValue()),
+                "trace_cells": int(self.txt_trace_cells.GetValue()) if self.txt_trace_cells.GetValue().strip() else 1
             },
             "mesh_gap": {
                 "x_cells": int(self.txt_gap_x.GetValue()),

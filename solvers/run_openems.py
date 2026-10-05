@@ -11,6 +11,9 @@ import numpy as np
 import argparse
 import subprocess
 import multiprocessing
+from scipy.linalg import solve_toeplitz
+from scipy.signal import lfilter, lfiltic
+from scipy.signal import czt
 import skrf as rf
 from skrf.vectorFitting import VectorFitting
 try:
@@ -114,6 +117,37 @@ def plot_touchstone(filepath):
         plt.show()
     except Exception as e:
         print(f"[!] Failed to parse Touchstone file via scikit-rf: {e}")
+
+
+def extrapolate_ar(signal, p_order=150, ext_length=100000):
+    """
+    Extrapolates a decaying time-domain signal using a Yule-Walker Autoregressive (AR) model.
+    Guarantees stability (poles inside the unit circle) and utilizes fast IIR filtering.
+    """
+    # 1. Extract the late-time tail for autocorrelation
+    tail_len = min(len(signal), p_order * 5)
+    tail = signal[-tail_len:]
+
+    # 2. Compute Autocorrelation
+    r = np.correlate(tail, tail, mode='full')
+    r = r[len(tail) - 1:]
+
+    # 3. Solve Yule-Walker equations for AR coefficients
+    # This matrix equation guarantees a stable decay profile
+    a_coeffs = solve_toeplitz((r[:p_order], r[:p_order]), -r[1:p_order + 1])
+
+    # 4. Formulate the AR model as an IIR Filter
+    b = np.array([1.0])  # Numerator
+    a = np.concatenate(([1.0], a_coeffs))  # Denominator
+
+    # 5. Calculate filter initial conditions (zi) from the raw FDTD signal
+    y_past = signal[-p_order:][::-1]
+    zi = lfiltic(b, a, y_past)
+
+    # 6. Extrapolate by feeding zero-energy input into the pre-charged IIR filter
+    extrapolated, _ = lfilter(b, a, np.zeros(ext_length), zi=zi)
+
+    return np.concatenate((signal, extrapolated))
 
 def convert_s_params_to_spice(touchstone_path, num_poles=13):
     """
@@ -242,12 +276,17 @@ class PortManager:
                 pad = self._find_pad(term.get("kiid", ""))
                 if pad:
                     px, py = to_csx(pad["x"], pad["y"], self.config.center_x, self.config.center_y)
+
                     pad_shapes = pad.get("pad_shapes", [])
                     if pad_shapes:
                         r_x = pad_shapes[0].get("size_x_mm", 1.0) / 2.0
                         r_y = pad_shapes[0].get("size_y_mm", 1.0) / 2.0
                     else:
                         r_x, r_y = 0.5, 0.5
+
+                    # Provide EXACT port boundaries to guarantee physical connection
+                    self.geometry.key_x_points.extend([px - r_x, px + r_x])
+                    self.geometry.key_y_points.extend([py - r_y, py + r_y])
 
                     p_type_clean = str(p_info.get("type", "Lumped")).lower()
                     if "msl" in p_type_clean or "microstrip" in p_type_clean:
@@ -312,8 +351,19 @@ class PortManager:
 
 
             elif "coplanar" in p_type_clean or "cpw" in p_type_clean:
-                port = FDTD.AddCPWPort(port_nr, p_start, p_stop, p_dir, excite=excite_val, priority=10000)
-                print(f"[*] Registered Port {port_nr} as CPWPort")
+                gap_width = float(port_params.get("cpw_gap", 0.25))
+                port = FDTD.AddCPWPort(
+                    port_nr,
+                    metal_prop,  # The metal property of the signal layer
+                    p_start,
+                    p_stop,
+                    prop_dir,  # Direction of wave travel
+                    exc_dir,  # E-field direction across the gaps
+                    gap_width,  # The gap width we added to the GUI
+                    excite=excite_val,
+                    priority=10000
+                )
+                print(f"[*] Registered Port {port_nr} as CPWPort (gap={gap_width}mm)")
 
             elif "microstrip" in p_type_clean or "msl" in p_type_clean:
                 feed_shift = float(port_params.get("feed_shift", 0.0))
@@ -342,6 +392,7 @@ class PortManager:
                 )
                 print(f"[*] Registered Port {port_nr} as MSL Port (prop_dir='{prop_dir}', exc_dir='{exc_dir}')")
 
+
             else:
                 port = FDTD.AddLumpedPort(
                     port_nr,
@@ -352,8 +403,9 @@ class PortManager:
                     excite=excite_val,
                     priority=10000
                 )
-                print(f"[*] Registered Port {port_nr} natively as LumpedPort (excite={excite_val:+.1f}, R={R:.2f} Ohm, dir='{exc_dir}')")
-
+                print(
+                    f"[*] Registered Port {port_nr} natively as LumpedPort (excite={excite_val:+.1f}, R={R:.2f} Ohm, dir='{exc_dir}')")
+                # Native mesh snapping - CRITICAL to align fields to the port edges
             print(f"[*] Registered Port {port_nr} as {p_type_clean}")
             return port
         except Exception as e:
@@ -389,8 +441,35 @@ class PortManager:
             sig_data = self.config.layer_z.get(sig_layer, {})
             ref_data = self.config.layer_z.get(ref_layer, {})
 
-            z_sig = sig_data.get("z", 0.0)
-            z_ref = ref_data.get("z", 0.0)
+            # --- DYNAMIC Z-OVERLAP LOGIC ---
+            if not getattr(self.config, 'is_2_5d', True):
+                z_sig_top = sig_data.get("z", 0.0)
+                sig_thick = sig_data.get("thickness", 0.0)
+                z_ref_top = ref_data.get("z", 0.0)
+                ref_thick = ref_data.get("thickness", 0.0)
+
+                # Identify the inner mating surfaces (the strict dielectric gap)
+                if z_sig_top > z_ref_top:
+                    z_min_lumped = z_ref_top
+                    z_max_lumped = z_sig_top - sig_thick
+                else:
+                    z_min_lumped = z_sig_top
+                    z_max_lumped = z_ref_top - ref_thick
+
+                # Z bounds for MSL ports (must encompass full metal)
+                z_sig_msl = z_sig_top
+                z_ref_msl = z_ref_top
+            else:
+                # 2.5D Mode (thin sheets)
+                z_sig_top = sig_data.get("z", 0.0)
+                z_ref_top = ref_data.get("z", 0.0)
+                z_min_lumped = min(z_sig_top, z_ref_top)
+                z_max_lumped = max(z_sig_top, z_ref_top)
+                z_sig_msl = z_sig_top
+                z_ref_msl = z_ref_top
+
+            # Lock these precise overlap coordinates into the FDTD grid lines
+            self.geometry.key_z_points.extend([z_min_lumped, z_max_lumped])
 
             actual_z0 = port_z0 / 2.0 if "Differential" in mode else port_z0
 
@@ -412,17 +491,18 @@ class PortManager:
                     msl_length = float(term_data.get("msl_length", p_info.get("msl_length", 50.0)))
                     feed_shift = float(term_data.get("feed_shift", p_info.get("feed_shift", 4.48)))
                     meas_shift = float(term_data.get("meas_plane_shift", p_info.get("meas_plane_shift", 16.67)))
-                    # MSLPort: start[2] must be signal metal (z_sig), stop[2] must be GND (z_ref)
+
+                    # MSLPort uses the absolute outer bounds of the metal
                     if prop_axis == 'x':
                         p_start_x = px - r_x if dir_sign == 1 else px + r_x
                         p_stop_x = p_start_x + (msl_length * dir_sign)
-                        p_start = [p_start_x, py - r_y, z_sig]
-                        p_stop  = [p_stop_x,  py + r_y, z_ref]
+                        p_start = [p_start_x, py - r_y, z_sig_msl]
+                        p_stop = [p_stop_x, py + r_y, z_ref_msl]
                     else:
                         p_start_y = py - r_y if dir_sign == 1 else py + r_y
                         p_stop_y = p_start_y + (msl_length * dir_sign)
-                        p_start = [px - r_x, p_start_y, z_sig]
-                        p_stop  = [px + r_x, p_stop_y,  z_ref]
+                        p_start = [px - r_x, p_start_y, z_sig_msl]
+                        p_stop = [px + r_x, p_stop_y, z_ref_msl]
 
                     p_info["current_prop_dir"] = prop_axis
                     return self._create_openems_port(
@@ -430,9 +510,9 @@ class PortManager:
                     )
 
                 else:
-                    # LumpedPort: start at GND (z_ref), stop at Signal (z_sig)
-                    p_start = [px - r_x, py - r_y, z_ref]
-                    p_stop  = [px + r_x, py + r_y, z_sig]
+                    # LumpedPort uses the precisely calculated inner-face bite
+                    p_start = [px - r_x, py - r_y, z_min_lumped]
+                    p_stop = [px + r_x, py + r_y, z_max_lumped]
                     return self._create_openems_port(
                         FDTD, port_nr, p_start, p_stop, "z", port_type, excitation, R=actual_z0, port_params=p_info
                     )
@@ -488,13 +568,15 @@ class PortManager:
 #  (OpenEMSEngine)
 # ==========================================
 class OpenEMSEngine:
-    def __init__(self, json_path="simulation_metadata.json"):
+    def __init__(self, json_path="simulation_metadata.json", info_only=False):
         print(f"[*] Initializing OpenEMSEngine with: {json_path}")
         self.json_path = json_path  
         self.config = SimulationConfig(json_path)
         self.CSX = CSXGeometryLogger(ContinuousStructure())
+        self.info_only = info_only
+        ts = 1 if info_only else self.config.max_timesteps
         self.FDTD = openEMS.openEMS(
-            NrTS=self.config.max_timesteps,
+            NrTS=ts,
             EndCriteria=10.0 ** (self.config.energy_limit_db / 10.0)
         )
         self.FDTD.SetCSX(self.CSX.GetCSX())
@@ -595,6 +677,46 @@ class OpenEMSEngine:
 
             for port in dummy_engine.port_mgr.ports_list:
                 port.CalcPort(port_dir, freq, ref_impedance=self.config.port_reference_impedance)
+                if self.config.raw_data.get("use_ar_filter", False):
+                    ar_steps = self.config.raw_data.get("ar_extrap_steps", 100000)
+
+                    # Extract 1D arrays for voltage and current natively in Python
+                    vt = port.ut_tot
+                    it = port.it_tot
+
+                    # Extrapolate
+                    vt_ext = extrapolate_ar(vt, p_order=150, ext_length=ar_steps)
+                    it_ext = extrapolate_ar(it, p_order=150, ext_length=ar_steps)
+
+                    # EXACT YEE GRID TIME RECONSTRUCTION
+                    # The time vectors are stored in the u_data and i_data objects
+                    t_v = np.array(port.u_data.ui_time).flatten()
+                    t_i = np.array(port.i_data.ui_time).flatten()
+                    dt_v = np.average(np.diff(t_v))
+                    extended_time_v = t_v[0] + np.arange(len(vt_ext)) * dt_v
+
+                    dt_i = np.average(np.diff(t_i))
+                    extended_time_i = t_i[0] + np.arange(len(it_ext)) * dt_i
+
+                    omega = 2.0 * np.pi * freq
+
+                    # Pre-allocate output arrays to prevent memory fragmentation
+                    port.uf_tot = np.zeros(len(freq), dtype=complex)
+                    port.if_tot = np.zeros(len(freq), dtype=complex)
+
+                    # Memory-Efficient Manual DFT
+                    # Iterates through frequencies one-by-one to keep RAM usage near zero
+                    for idx, w in enumerate(omega):
+                        phase_v = np.exp(-1j * w * extended_time_v)
+                        port.uf_tot[idx] = np.sum(vt_ext * phase_v) * dt_v
+
+                        phase_i = np.exp(-1j * w * extended_time_i)
+                        port.if_tot[idx] = np.sum(it_ext * phase_i) * dt_i
+
+                    # Recompute Incident and Reflected waves
+                    z0 = self.config.port_reference_impedance
+                    port.uf_inc = 0.5 * (port.uf_tot + port.if_tot * z0)
+                    port.uf_ref = 0.5 * (port.uf_tot - port.if_tot * z0)
 
             col = active_port - 1
             inc_wave = dummy_engine.port_mgr.ports_list[col].uf_inc
@@ -613,7 +735,7 @@ class OpenEMSEngine:
                         s_matrix[i, j, :] = s_matrix[j, i, :]
 
         # Export via scikit-rf (handles dynamic .s1p, .s2p, .s4p, .sNp extension)
-        snp_path = os.path.join(self.config.sim_dir, f"simulation_results_full.s{total_ports}p")
+        snp_path = os.path.join(self.config.sim_dir, f"simulation_results_full{'_AR' * self.config.raw_data.get('use_ar_filter', False)}.s{total_ports}p")
         net = export_network_to_touchstone(snp_path, freq, s_matrix, z0=self.config.port_reference_impedance)
 
         # Plot Mixed-Mode directly via scikit-rf if 4 ports
@@ -629,9 +751,50 @@ class OpenEMSEngine:
         f_ghz = freq_array / 1e9
         num_f = len(freq_array)
         num_ports = len(self.port_mgr.ports_list)
+        f_step = freq_array[1] - freq_array[0]
+        f_start = freq_array[0]
 
         for p in self.port_mgr.ports_list:
             p.CalcPort(self.config.sim_dir, freq_array, ref_impedance=self.config.port_reference_impedance)
+            if self.config.raw_data.get("use_ar_filter", True):
+                ar_steps = self.config.raw_data.get("ar_extrap_steps", 100000)
+
+                # Extract 1D arrays for voltage and current natively in Python
+                vt = p.ut_tot
+                it = p.it_tot
+
+                # Extrapolate
+                vt_ext = extrapolate_ar(vt, p_order=150, ext_length=ar_steps)
+                it_ext = extrapolate_ar(it, p_order=150, ext_length=ar_steps)
+
+                # EXACT YEE GRID TIME RECONSTRUCTION
+                # The time vectors are stored in the u_data and i_data objects
+                t_v = np.array(p.u_data.ui_time).flatten()
+                t_i = np.array(p.i_data.ui_time).flatten()
+                dt_v = np.average(np.diff(t_v))
+                #extended_time_v = t_v[0] + np.arange(len(vt_ext)) * dt_v
+
+                dt_i = np.average(np.diff(t_i))
+                #extended_time_i = t_i[0] + np.arange(len(it_ext)) * dt_i
+
+                #omega = 2.0 * np.pi * freq_array
+
+                w_v = np.exp(-1j * 2.0 * np.pi * f_step * dt_v)
+                a_v = np.exp(1j * 2.0 * np.pi * f_start * dt_v)
+
+                w_i = np.exp(-1j * 2.0 * np.pi * f_step * dt_i)
+                a_i = np.exp(1j * 2.0 * np.pi * f_start * dt_i)
+
+                phase_offset_v = np.exp(-1j * 2.0 * np.pi * freq_array * t_v[0])
+                p.uf_tot = czt(vt_ext, m=num_f, w=w_v, a=a_v) * dt_v * phase_offset_v
+
+                phase_offset_i = np.exp(-1j * 2.0 * np.pi * freq_array * t_i[0])
+                p.if_tot = czt(it_ext, m=num_f, w=w_i, a=a_i) * dt_i * phase_offset_i
+
+                # Recompute Incident and Reflected waves
+                z0 = self.config.port_reference_impedance
+                p.uf_inc = 0.5 * (p.uf_tot + p.if_tot * z0)
+                p.uf_ref = 0.5 * (p.uf_tot - p.if_tot * z0)
 
         if 'HAS_MATPLOTLIB' in globals() and HAS_MATPLOTLIB:
             plt.figure(figsize=(12, 7))
@@ -647,7 +810,7 @@ class OpenEMSEngine:
                 plt.plot(f_ghz, 20.0 * np.log10(np.abs(s21) + 1e-12), label='S21 (Insertion Loss)', color='blue',
                          linewidth=2)
 
-            ts_path = os.path.join(self.config.sim_dir, "simulation_results.s2p")
+            ts_path = os.path.join(self.config.sim_dir, f"simulation_results{'_AR' * self.config.raw_data.get('use_ar_filter', False)}.s2p")
             write_touchstone_s2p(ts_path, freq_array, s11, s21, z0=self.config.port_reference_impedance)
 
         # --- 1-Port Matrix (Isolated Single-Ended) ---
@@ -791,6 +954,20 @@ class OpenEMSEngine:
             print(f"[!] Failed to launch AppCSXCAD: {e}")
 
     def run_simulation(self):
+        if self.info_only:
+            print("\n[*] Commencing FDTD Dry-Run (1 Timestep) for Info Extraction...")
+            sim_dir = os.path.join(self.config.sim_dir, "info_run")
+            os.makedirs(sim_dir, exist_ok=True)
+
+            # Build model for Port 1 just to generate the mesh and excitation
+            self.build_model(active_port=1 if self.config.extract_matrix else None)
+
+            remove_abort_file(sim_dir)
+            self.FDTD.Run(sim_dir, cleanup=True)
+            remove_abort_file(sim_dir)
+
+            print("\n--- Info Extraction Complete ---")
+            sys.exit(0)
         if not self.config.extract_matrix:
             print("\n[*] Commencing Direct Differential FDTD Run...")
             sim_dir = self.config.sim_dir
@@ -866,6 +1043,7 @@ if __name__ == "__main__":
     parser.add_argument("--calc-mesh", action="store_true", help="Calculate mesh cell count for GUI")
     parser.add_argument("--plot", type=str, metavar="FILE", help="Path to a Touchstone (.s2p or .s4p) file to plot")
     parser.add_argument("--paraview", action="store_true", help="Launch ParaView to animate 3D fields")
+    parser.add_argument("--info", action="store_true", help="Run 1 timestep to extract excitation and mesh info")
 
     args = parser.parse_args()
 
@@ -876,7 +1054,7 @@ if __name__ == "__main__":
 
     # If the user clicks "Run" in Windows, intercept it and hand the entire Python script to Linux
     # --- THE WSL2 BRIDGE ---
-    if os.name == 'nt' and args.run:
+    if os.name == 'nt' and (args.run or args.info):
         use_wsl2 = False
         if os.path.exists(args.json_file):
             try:
@@ -898,7 +1076,10 @@ if __name__ == "__main__":
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             creationflags = subprocess.CREATE_NO_WINDOW
-            ret = subprocess.call(["wsl", "python3", script_path, json_arg, "--run"],
+            cmd = ["wsl", "python3", script_path, json_arg]
+            if args.run: cmd.append("--run")
+            if args.info: cmd.append("--info")
+            ret = subprocess.call(cmd,
                                   stdout=sys.stdout,
                                   stderr=subprocess.STDOUT,
                                   startupinfo=startupinfo,
@@ -917,7 +1098,7 @@ if __name__ == "__main__":
         engine.preview_geometry()
     elif args.paraview:
         engine.launch_paraview()
-    else:
+    elif args.run or args.info:
         if os.name == 'nt':
             os.system("taskkill /f /im openEMS.exe >nul 2>&1")
         else:

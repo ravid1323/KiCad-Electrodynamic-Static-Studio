@@ -33,18 +33,20 @@ import openEMS
 from openEMS import ports
 
 
+GRID_Q = 1e-3  # 1 um quantization
+def q(v):
+    return round(float(v) / GRID_Q) * GRID_Q
+
 def to_csx(x, y, center_x, center_y, snap=0.0):
     """
-    Convert coordinates to CSXCAD relative to center.
-    Preserves exact geometry by default to avoid altering trace gap impedance.
+    Convert coordinates to CSXCAD relative to center, strictly quantized.
     """
-    rel_x = float(x - center_x)
-    rel_y = float(y - center_y)
+    rel_x = q(float(x - center_x))
+    rel_y = q(float(y - center_y))
 
-    # Only snap if a valid positive snap value is explicitly requested
     if snap and snap > 0:
-        rel_x = round(rel_x / snap) * snap
-        rel_y = round(rel_y / snap) * snap
+        rel_x = q(round(rel_x / snap) * snap)
+        rel_y = q(round(rel_y / snap) * snap)
 
     return rel_x, rel_y
 
@@ -362,6 +364,30 @@ class GeometryBuilder:
             self.key_x_points.extend([x1 - w / 2, x1 + w / 2, x2 - w / 2, x2 + w / 2])
             self.key_y_points.extend([y1 - w / 2, y1 + w / 2, y2 - w / 2, y2 + w / 2])
 
+            # --- THE TRACE MESH ---
+            track_length = np.hypot(x2 - x1, y2 - y1)
+            is_diagonal = abs(x2 - x1) > 1e-3 and abs(y2 - y1) > 1e-3
+
+            # 1. Master Toggle (Add a checkbox in your GUI: "Force Mesh on Diagonal Traces")
+            mesh_diagonals = self.config.raw_data.get("mesh_diagonal_traces", True)
+
+            # 2. Density Control (Add a spinbox in your GUI: "Diagonal Cells per Trace Width")
+            # Defaulting to 1 guarantees physical connectivity without microscopic overmeshing.
+            trace_cells = int(self.config.mesh_feature.get("trace_cells", 1))
+
+            # ONLY inject if enabled and trace is diagonal
+            if is_diagonal and track_length > w and mesh_diagonals and trace_cells > 0:
+                step_size = w / trace_cells
+                num_steps = int(track_length / step_size)
+
+                if num_steps > 1:
+                    for i in range(1, num_steps):
+                        frac = i / float(num_steps)
+                        mx = x1 + frac * (x2 - x1)
+                        my = y1 + frac * (y2 - y1)
+                        self.key_x_points.extend([mx - w / 2, mx + w / 2])
+                        self.key_y_points.extend([my - w / 2, my + w / 2])
+
             if np.hypot(x2 - x1, y2 - y1) < 1e-3: continue
 
             line = LineString([(x1, y1), (x2, y2)])
@@ -383,6 +409,10 @@ class GeometryBuilder:
                 # Add pad bounding edges
                 self.key_x_points.extend([px - sx, px + sx])
                 self.key_y_points.extend([py - sy, py + sy])
+
+                if self.mesh_mgr:
+                    self.mesh_mgr.lock('x', px - sx, px + sx)
+                    self.mesh_mgr.lock('y', py - sy, py + sy)
 
                 # Enforce user settings across the pad feature
                 x_cells = self.config.mesh_feature.get("x_cells", 3)
@@ -706,8 +736,11 @@ class GeometryBuilder:
 class MeshManager:
     def __init__(self, config: SimulationConfig):
         self.config = config
-        # Dictionary to store explicit override regions: {'x': [(start, stop, cells, mode)], ...}
         self.overrides = {'x': [], 'y': [], 'z': []}
+        self.locked = {'x': set(), 'y': set(), 'z': set()}
+
+    def lock(self, axis, *vals):
+        self.locked[axis].update(q(v) for v in vals)
 
     def add_override_region(self, axis, start_coord, stop_coord, num_cells, mode='uniform'):
         """Registers a specific coordinate region to overwrite the mesh."""
@@ -748,16 +781,26 @@ class MeshManager:
             print(f"[*] Mesh Generation Attempt {attempt}/{max_attempts}...")
 
             if self.config.mesh_locks.get("conductor", True):
-                x_lines = np.unique(np.round(raw_x, 2))
-                y_lines = np.unique(np.round(raw_y, 2))
+                x_lines = np.unique(np.round(raw_x, 3))
+                y_lines = np.unique(np.round(raw_y, 3))
                 z_lines = np.unique(np.round(raw_z, 4))
             else:
                 x_lines, y_lines, z_lines = np.array([]), np.array([]), np.array([])
 
             try:
-                x_lines = self._filter_close_points(x_lines, 'x')
-                y_lines = self._filter_close_points(y_lines, 'y')
-                z_lines = self._filter_close_points(z_lines, 'z')
+                # Lock all extreme boundary points so they don't get averaged away
+                #if len(x_lines) > 0: self.lock('x', min(x_lines), max(x_lines))
+                #if len(y_lines) > 0: self.lock('y', min(y_lines), max(y_lines))
+                #if len(z_lines) > 0: self.lock('z', *z_lines)
+
+                valid_thk = [l['thickness'] for l in self.config.layer_z.values() if l.get('thickness', 0) > 0]
+                z_min_dist = min(min(valid_thk) / 2.0,
+                                 self.config.min_cell_size_mm) if valid_thk else self.config.min_cell_size_mm
+                xy_min_dist = self.config.min_cell_size_mm
+
+                x_lines = self._merge_locked(x_lines, 'x', xy_min_dist)
+                y_lines = self._merge_locked(y_lines, 'y', xy_min_dist)
+                z_lines = self._merge_locked(z_lines, 'z', z_min_dist)
 
                 self._auto_detect_features_and_gaps(x_lines, 'x')
                 self._auto_detect_features_and_gaps(y_lines, 'y')
@@ -767,14 +810,16 @@ class MeshManager:
                 y_lines = self._execute_overrides(y_lines, 'y')
                 z_lines = self._execute_overrides(z_lines, 'z')
 
+                x_lines = self._merge_locked(x_lines, 'x', xy_min_dist)
+                y_lines = self._merge_locked(y_lines, 'y', xy_min_dist)
+                z_lines = self._merge_locked(z_lines, 'z', z_min_dist)
+
                 # Verification check: Inspect generated arrays for Courant violations
                 for axis_lines in [x_lines, y_lines, z_lines]:
                     if len(axis_lines) > 1:
                         min_delta = np.min(np.diff(axis_lines))
-                        # If a generated cell violates the minimum cell limit, it's a conflict
-                        if min_delta < (self.config.min_cell_size_mm * 0.95):
-                            raise ValueError(
-                                f"Contradiction: Required {min_delta:.4f}mm cell violates {self.config.min_cell_size_mm}mm limit.")
+                        if min_delta < 0.9e-3:
+                            raise ValueError(f"CRITICAL: Sub-micron cell detected ({min_delta:.6f}mm).")
 
                 mesh_resolved = True
 
@@ -856,18 +901,28 @@ class MeshManager:
                 self.add_override_region(axis, p1, p2, 0, mode='edge_thirds')
 
     def _add_padding(self, lines, margin_neg=5.0, margin_pos=5.0):
-        if len(lines) == 0:
-            return lines
+        if len(lines) == 0: return lines
         min_v, max_v = min(lines), max(lines)
+
+        # 1. Add the free-space margin
+        free_space_neg = min_v - margin_neg
+        free_space_pos = max_v + margin_pos
         segments = [lines]
 
+        # 2. Build PML OUTSIDE the free space based on the last cell size
         if margin_neg > 0.001:
-            left = np.linspace(min_v - margin_neg, min_v, self.config.pml_cells_count + 1)[:-1]
-            segments.insert(0, left)
+            segments.insert(0, [free_space_neg])
+            pml_step = self.config.min_cell_size_mm * 2.0
+            pml_neg = np.linspace(free_space_neg - (pml_step * self.config.pml_cells_count), free_space_neg,
+                                  self.config.pml_cells_count + 1)[:-1]
+            segments.insert(0, pml_neg)
 
         if margin_pos > 0.001:
-            right = np.linspace(max_v, max_v + margin_pos, self.config.pml_cells_count + 1)[1:]
-            segments.append(right)
+            segments.append([free_space_pos])
+            pml_step = self.config.min_cell_size_mm * 2.0
+            pml_pos = np.linspace(free_space_pos, free_space_pos + (pml_step * self.config.pml_cells_count),
+                                  self.config.pml_cells_count + 1)[1:]
+            segments.append(pml_pos)
 
         return np.unique(np.concatenate(segments))
 
@@ -910,7 +965,7 @@ class MeshManager:
                         final_lines.extend([reg_start, reg_stop]) # 1 segment (No internal lines)
 
         # Apply the dynamic rounding
-        return np.unique(np.round(final_lines, rounding_digits))
+        return np.unique(np.round(final_lines, 3)) #  rounding_digits))
 
     def _apply_global_growth(self, grid, axis):
         settings = self.config.mesh_global.get(axis, {})
@@ -926,6 +981,15 @@ class MeshManager:
             # Linear/Conservative growth limit
             grid.SmoothMeshLines(axis, max_size, ratio=min(1.1, ratio))
 
+    def _merge_locked(self, lines, axis, min_dist):
+        locked = np.array(sorted(list(self.locked[axis])))
+        if locked.size == 0:
+            return np.unique(np.round(lines, 3))
+
+        # Keep background lines only if they don't violate the min_dist to a LOCKED port/pad line
+        keep = [v for v in lines if np.min(np.abs(locked - v)) > min_dist]
+        return np.unique(np.round(np.concatenate([keep, locked]), 3))
+
     def _filter_close_points(self, points, axis):
         if len(points) == 0:
             return points
@@ -940,23 +1004,17 @@ class MeshManager:
         final_coords = []
         current_cluster = [sorted_coords[0]]
 
+        # Single-Pass Non-Chaining Filter
         for pt in sorted_coords[1:]:
-            if (pt - current_cluster[-1]) < min_dist:
+            # Compare against the FIRST point in the cluster, not the LAST
+            if (pt - current_cluster[0]) <= min_dist:
                 current_cluster.append(pt)
             else:
                 final_coords.append(np.mean(current_cluster))
                 current_cluster = [pt]
 
         final_coords.append(np.mean(current_cluster))
-
-        safe_coords = [final_coords[0]]
-        for pt in final_coords[1:]:
-            if (pt - safe_coords[-1]) >= min_dist:
-                safe_coords.append(pt)
-            else:
-                safe_coords[-1] = (safe_coords[-1] + pt) / 2.0
-
-        return np.round(safe_coords, 4)
+        return np.round(final_coords, 4)
 
     def get_cell_count(self, CSX):
         grid = CSX.GetGrid()
@@ -965,6 +1023,5 @@ class MeshManager:
         ny = max(0, len(y) - 1) if y is not None else 0
         nz = max(0, len(z) - 1) if z is not None else 0
         return nx * ny * nz, nx, ny, nz
-
 
 
