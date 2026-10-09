@@ -90,6 +90,11 @@ class DCAnalysisEngine:
         for network_name, network_data in dc_params.items():
             load_params = network_data.get("load_sink", {})
 
+            vrm_kiid = network_data.get("vrm_source", {}).get("pad_kiid")
+            gnd_kiid = network_data.get("gnd_sink", {}).get("pad_kiid")
+            load_tail_kiid = load_params.get("tail_pad_kiid")
+            load_head_kiid = load_params.get("head_pad_kiid")
+
             vrm_start, vrm_stop = self.get_pad_bbox(network_data.get("vrm_source", {}).get("pad_kiid"))
             gnd_start, gnd_stop = self.get_pad_bbox(network_data.get("gnd_sink", {}).get("pad_kiid"))
             load_tail_start, load_tail_stop = self.get_pad_bbox(load_params.get("tail_pad_kiid"))
@@ -105,7 +110,13 @@ class DCAnalysisEngine:
                 "load_tail_bounds": (load_tail_start, load_tail_stop),
                 "load_head_bounds": (load_head_start, load_head_stop),
                 "vrm_voltage": float(network_data.get("vrm_source", {}).get("voltage", 5.0)),
-                "load_current": float(load_params.get("current_A", 1.0))
+                "load_current": float(load_params.get("current_A", 1.0)),
+                "pad_kiids": {
+                    "vrm": vrm_kiid,
+                    "gnd": gnd_kiid,
+                    "load_tail": load_tail_kiid,
+                    "load_head": load_head_kiid
+                }
             }
 
         print("[*] Finalizing Smart Mesh for MNA Solver...")
@@ -152,6 +163,7 @@ class DCAnalysisEngine:
             safe_i = i_load if i_load != 0 else 1e-9
 
             report["networks"][network_name] = {
+                "pad_kiids": data["pad_kiids"],
                 "system_conditions": {
                     "vrm_v_nominal": v_nominal,
                     "load_current_A": i_load
@@ -227,7 +239,8 @@ class DCAnalysisEngine:
                 "v_nominal": bounds["vrm_voltage"],
                 "i_load": bounds["load_current"],
                 "v_vcc_sink_avg": float(np.mean(v_vcc_nodes)),
-                "v_gnd_sink_avg": float(np.mean(v_gnd_nodes))
+                "v_gnd_sink_avg": float(np.mean(v_gnd_nodes)),
+                "pad_kiids": bounds["pad_kiids"]
             }
 
         # Save to the specific DC directory

@@ -1,79 +1,146 @@
 import os, sys
 import numpy as np
 import json
-import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+    print("[!] Warning: 'matplotlib' library is missing! Run: pip install matplotlib")
+
+
 import pandas as pd
 import scipy.signal
 import skrf as rf
 from skrf.vectorFitting import VectorFitting
 import sympy as sp
 
+def plot_touchstone(filepath):
+    """Reads any Touchstone file (.s1p, .s2p, .s4p, .sNp) and plots S-parameters."""
+    if not HAS_MATPLOTLIB or not os.path.exists(filepath):
+        return
 
-def convert_s_params_to_spice(touchstone_path, dc_ir_file=None, output_cir_file=None, num_poles=5, z0=50.0):
-    """
-    Converts a Touchstone S-parameter file into a SPICE subcircuit (.cir).
-    Optionally merges DC IR drop data to synthesize a broadband model starting at 0 Hz.
-    """
-    if not os.path.exists(touchstone_path):
-        print(f"[!] Error: File not found -> {touchstone_path}")
+    print(f"[*] Parsing and plotting Touchstone file: {filepath}")
+    try:
+        net = rf.Network(filepath)
+        net.frequency.unit = 'ghz'
+        plt.figure(figsize=(10, 6))
+
+        if net.nports == 1:
+            net.plot_s_db(m=0, n=0, label='S11 (Return Loss)')
+        elif net.nports == 2:
+            net.plot_s_db(m=0, n=0, label='S11 (Return Loss)', color='red')
+            net.plot_s_db(m=1, n=0, label='S21 (Insertion Loss)', color='blue')
+        elif net.nports == 4:
+            # Rigorous Mixed-Mode conversion (2 differential pairs)
+            net_mm = net.copy()
+            net_mm.se2gmm(p=2)
+            net_mm.plot_s_db(m=0, n=0, label='Sdd11 (Diff Return Loss)', color='red')
+            net_mm.plot_s_db(m=1, n=0, label='Sdd21 (Diff Insertion Loss)', color='blue')
+            net_mm.plot_s_db(m=2, n=2, label='Scc11 (Comm Return Loss)', color='orange', linestyle='--')
+        else:
+            net.plot_s_db()
+
+        plt.title('S-Parameters Plot (openEMS)')
+        plt.xlabel('Frequency (GHz)')
+        plt.ylabel('Magnitude (dB)')
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+        plt.legend(loc='best')
+        plt.tight_layout()
+        out_png = filepath + ".png"
+        plt.savefig(out_png)
+        print(f"[*] Plot successfully saved to {out_png}")
+        plt.pause(10)
+    except Exception as e:
+        print(f"[!] Failed to parse Touchstone file via scikit-rf: {e}")
+
+
+def get_dc_resistance_for_port(sim_metadata_path, dc_ir_path, port_index=1):
+    """Cross-references KIIDs to find the DC resistance specific to this FDTD port."""
+    if not sim_metadata_path or not dc_ir_path: return None
+    if not os.path.exists(sim_metadata_path) or not os.path.exists(dc_ir_path): return None
+
+    try:
+        with open(sim_metadata_path, 'r') as f:
+            em_meta = json.load(f)
+        with open(dc_ir_path, 'r') as f:
+            dc_meta = json.load(f)
+
+        port_key = f"port_{port_index}"
+        port_data = em_meta.get("manual_ports", {}).get(port_key, {})
+
+        em_pos_kiid = port_data.get("positive_terminal", {}).get("kiid")
+        em_neg_kiid = port_data.get("negative_terminal", {}).get("kiid")
+
+        for net_name, net_data in dc_meta.get("networks", {}).items():
+            kiids = net_data.get("pad_kiids", {})
+
+            if (em_pos_kiid == kiids.get("vrm") and em_neg_kiid == kiids.get("gnd")) or \
+                    (em_pos_kiid == kiids.get("gnd") and em_neg_kiid == kiids.get("vrm")):
+                return net_data.get("power_net_vcc", {}).get("r_dc_ohms", 0) + \
+                    net_data.get("return_net_gnd", {}).get("r_dc_ohms", 0)
+
+            if (em_pos_kiid == kiids.get("load_tail") and em_neg_kiid == kiids.get("load_head")) or \
+                    (em_pos_kiid == kiids.get("load_head") and em_neg_kiid == kiids.get("load_tail")):
+                return net_data.get("load_actual", {}).get("total_loop_r_ohms", 1e-6)
+
+        return None
+    except Exception as e:
+        print(f"[!] KIID correlation failed: {e}")
         return None
 
-    print(f"[*] Loading network from {touchstone_path}...")
-    net = rf.Network(touchstone_path, z0=z0)
-    num_ports = net.number_of_ports
-    print(f"[*] Detected {num_ports}-Port Network.")
 
-    n_poles_real = 1
-    if dc_ir_file and os.path.exists(dc_ir_file):
-        print(f"[*] Integrating DC IR data from {dc_ir_file}...")
-        with open(dc_ir_file, 'r') as f:
-            dc_data = json.load(f)
+def stitch_dc_to_s_params(s_param_file, dc_ir_file, sim_metadata_file, port_index=1, z0=50.0):
+    ntwk = rf.Network(s_param_file)
+    r_dc = get_dc_resistance_for_port(sim_metadata_file, dc_ir_file, port_index)
 
-        if 'networks' in dc_data and len(dc_data['networks']) > 0:
-            first_net = list(dc_data['networks'].values())[0]
-            r_dc = first_net['load_actual']['total_loop_r_ohms']
-        else:
-            r_dc = 1e-6  # Fallback if empty
-
+    if r_dc is not None:
+        print(f"[*] KIID Match! Anchoring 0 Hz point to DC analysis (R_dc = {r_dc:.4f} Ohms)")
         s11_dc = r_dc / (r_dc + 2 * z0)
         s21_dc = (2 * z0) / (r_dc + 2 * z0)
-        s_matrix_dc = np.array([[s11_dc, s21_dc],
-                                [s21_dc, s11_dc]])
+        s_matrix_dc = np.zeros((ntwk.nports, ntwk.nports), dtype=complex)
 
-        if net.f[0] <= 1e-6:
-            net.s[0] = s_matrix_dc
-        else:
+        if ntwk.nports == 2:
+            s_matrix_dc[0, 0] = s_matrix_dc[1, 1] = s11_dc
+            s_matrix_dc[0, 1] = s_matrix_dc[1, 0] = s21_dc
+        elif ntwk.nports == 1:
+            s_matrix_dc[0, 0] = (r_dc - z0) / (r_dc + z0)
+
+        if ntwk.f[0] > 1e-6:
             freq_dc = rf.Frequency(0, 0, 1, unit='hz')
             ntwk_dc = rf.Network(frequency=freq_dc, s=np.array([s_matrix_dc]), z0=z0)
-            net = rf.stitch(ntwk_dc, net)
+            ntwk = rf.stitch(ntwk_dc, ntwk)
+        else:
+            ntwk.s[0] = s_matrix_dc
+    else:
+        print("[*] No matching DC KIID found for these ports. Proceeding with AC only.")
+    return ntwk, (r_dc is not None)
 
-        n_poles_real = 4
 
-    vf = VectorFitting(net)
+def convert_s_params_to_spice(s_param_file, dc_ir_file=None, sim_metadata_file=None, num_poles=13, z0=50.0):
+    if not os.path.exists(s_param_file): return
+    print(f"[*] Loading network from {s_param_file}...")
+
+    ntwk, has_dc = stitch_dc_to_s_params(s_param_file, dc_ir_file, sim_metadata_file, port_index=1, z0=z0)
+    n_poles_real = 4 if has_dc else 1
+
+    vf = VectorFitting(ntwk)
     print(f"[*] Performing Vector Fitting with {n_poles_real} real poles and {num_poles} complex pole pairs...")
     vf.vector_fit(n_poles_real=n_poles_real, n_poles_cmplx=num_poles)
 
     if not vf.is_passive():
         print("[*] Model is non-passive. Enforcing passivity for SPICE stability...")
         vf.passivity_enforce()
-    else:
-        print("[*] Model is inherently passive. No enforcement needed.")
 
-    if not output_cir_file:
-        base_name = os.path.splitext(os.path.basename(touchstone_path))[0]
-        output_dir = os.path.dirname(touchstone_path)
-        output_cir_file = os.path.join(output_dir, f"{base_name}_model.cir")
-    else:
-        base_name = os.path.splitext(os.path.basename(output_cir_file))[0]
+    output_dir = os.path.dirname(s_param_file)
+    base_name = os.path.splitext(os.path.basename(s_param_file))[0]
+    spice_path = os.path.join(output_dir, f"{base_name}_model.cir")
 
-    vf.write_spice_subcircuit_s(output_cir_file)
-    print(f"[*] SPICE Subcircuit successfully exported -> {output_cir_file}")
-
-    pins = " ".join([f"p{i + 1}" for i in range(num_ports)])
-    print(f"[*] SPICE Definition: .subckt {base_name} {pins} ref")
-
-    return vf
+    vf.write_spice_subcircuit_s(spice_path)
+    print(f"[*] SPICE Subcircuit successfully exported -> {spice_path}")
+    print(f"[*] SPICE Definition: .subckt {base_name}_model " + " ".join(
+        [f"p{i + 1}" for i in range(ntwk.nports)]) + " ref")
 
 def convert_s_params_to_spice_lib(touchstone_path, num_poles=5):
     """
@@ -306,67 +373,96 @@ def load_time_domain():
     plt.show()
 
 
-def plot_impedance_magnitude(filepath, z0=50.0):
-    """Calculates and plots the Impedance Magnitude ||Z_in|| from a Touchstone file."""
-    if not os.path.exists(filepath):
-        print(f"[!] File not found: {filepath}")
-        return
-
-    print(f"[*] Calculating Z(f) for: {filepath}")
+def plot_impedance_magnitude(s_param_file, dc_ir_file=None, sim_metadata_file=None):
+    """Converts S-Parameters to Z-Parameters to plot Input Impedance Magnitude (|Z|)."""
+    if not HAS_MATPLOTLIB or not os.path.exists(s_param_file): return
+    print(f"[*] Plotting |Z| Input Impedance for {os.path.basename(s_param_file)}")
 
     try:
-        # 1. Parse Touchstone file, ignoring comments
-        with open(filepath, 'r') as f:
-            lines = [line.strip() for line in f if
-                     not line.startswith('!') and not line.startswith('#') and line.strip()]
+        ntwk, _ = stitch_dc_to_s_params(s_param_file, dc_ir_file, sim_metadata_file)
+        ntwk.frequency.unit = 'ghz'
 
-        data_vals = []
-        for line in lines:
-            data_vals.extend([float(x) for x in line.split()])
-
-        # 2. Extract S11 based on format (.s1p or .s2p)
-        if filepath.lower().endswith('.s1p'):
-            data = np.array(data_vals).reshape(-1, 3)
-            freqs_ghz = data[:, 0]
-            s11 = data[:, 1] + 1j * data[:, 2]
-        elif filepath.lower().endswith('.s2p'):
-            # s2p format: Freq Re11 Im11 Re21 Im21 Re12 Im12 Re22 Im22[cite: 11]
-            data = np.array(data_vals).reshape(-1, 9)
-            freqs_ghz = data[:, 0]
-            s11 = data[:, 1] + 1j * data[:, 2]
-        else:
-            print("[!] Unsupported file extension. Use .s1p or .s2p")
-            return
-
-        # 3. Handle physical singularity (prevent division by zero if S11 is perfectly 1.0)
-        s11 = np.where(s11 == 1.0 + 0j, 1.0 - 1e-12 + 0j, s11)
-
-        # 4. Calculate Impedance Magnitude
-        z_in = z0 * (1 + s11) / (1 - s11)
-        z_mag = np.abs(z_in)
-
-        # 5. Generate Plot
         plt.figure(figsize=(10, 6))
-        plt.plot(freqs_ghz, z_mag, color='black', linewidth=2, label='$||Z_{in}||$')
-        plt.axhline(z0, color='blue', linestyle=':', label=f'Target ({z0} $\Omega$)')
+        if ntwk.nports >= 1:
+            plt.plot(ntwk.f_scaled, np.abs(ntwk.z[:, 0, 0]), label='|Z11| (Port 1 Input Impedance)', color='blue',
+                     linewidth=2)
+        if ntwk.nports >= 2:
+            plt.plot(ntwk.f_scaled, np.abs(ntwk.z[:, 1, 1]), label='|Z22| (Port 2 Input Impedance)', color='red',
+                     linewidth=2, linestyle='--')
 
-        plt.title('Input Impedance $Z(f)$ vs Frequency')
+        plt.title(f'Input Impedance Magnitude |Z| - {os.path.basename(s_param_file)}')
         plt.xlabel('Frequency (GHz)')
-        plt.ylabel('Impedance ($\Omega$)')
-        plt.grid(True, linestyle='--')
+        plt.ylabel('Impedance (Ohms)')
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
         plt.legend(loc='best')
         plt.tight_layout()
 
-        # Save and show
-        out_png = filepath.replace(os.path.splitext(filepath)[1], "_impedance.png")
+        out_png = s_param_file.replace(os.path.splitext(s_param_file)[1], "_zin.png")
         plt.savefig(out_png)
         print(f"[*] Plot successfully saved to {out_png}")
+        plt.show()
+    except Exception as e:
+        print(f"[!] Failed to parse and plot |Z|: {e}")
 
+
+def plot_spice_impedance_magnitude(csv_path, f_start, f_stop, num_points):
+    """
+    Reads a transient SPICE CSV (Time, Voltage, Current), converts it to the frequency domain
+    using a logarithmic sweep, and plots the Impedance Magnitude |Z|.
+    """
+    if not os.path.exists(csv_path):
+        print(f"[!] Error: File not found -> {csv_path}")
+        return
+
+    print(f"[*] Processing SPICE transient data from {csv_path}...")
+
+    try:
+        # 1. Load the KiCad SPICE CSV (Assumes Col 0: Time, Col 1: Voltage, Col 2: Current)
+        df = pd.read_csv(csv_path, comment='*')
+        time = df.iloc[:, 0].values
+        v_t = df.iloc[:, 1].values
+        i_t = df.iloc[:, 2].values
+
+        dt = np.mean(np.diff(time))
+
+        # 2. Create the logarithmic frequency array
+        freqs = np.logspace(np.log10(f_start), np.log10(f_stop), num_points)
+        omega = 2.0 * np.pi * freqs
+
+        # 3. Perform Discrete Fourier Transform at target frequencies
+        print(f"[*] Extracting Frequency Domain Data ({num_points} log-spaced points)...")
+        v_f = np.zeros(num_points, dtype=complex)
+        i_f = np.zeros(num_points, dtype=complex)
+
+        for idx, w in enumerate(omega):
+            phase = np.exp(-1j * w * time)
+            v_f[idx] = np.sum(v_t * phase) * dt
+            i_f[idx] = np.sum(i_t * phase) * dt
+
+        # 4. Calculate Impedance Magnitude |Z|
+        # Add a tiny epsilon (1e-15) to prevent division by zero anomalies
+        z_mag = np.abs(v_f / (i_f + 1e-15))
+
+        # 5. Plotting
+        plt.figure(figsize=(10, 6))
+
+        # Use semilogx for the logarithmic frequency scale
+        plt.semilogx(freqs, z_mag, color='black', linewidth=2, label='|Zin|')
+
+        plt.title(f'Input Impedance Magnitude |Z| (SPICE Transient)\n{os.path.basename(csv_path)}')
+        plt.xlabel('Frequency (Hz)')
+        plt.ylabel('Impedance (Ohms)')
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+        plt.legend(loc='best')
+        plt.tight_layout()
+
+        out_png = csv_path.replace(os.path.splitext(csv_path)[1], "_zin.png")
+        plt.savefig(out_png)
+        print(f"[*] Plot successfully saved to {out_png}")
         plt.show()
 
     except Exception as e:
-        print(f"[!] Failed to calculate impedance: {e}")
-
+        print(f"[!] Failed to parse SPICE CSV or calculate impedance: {e}")
 
 def plot_eye_diagram_with_mask(csv_path, bitrate_bps=5e9, signal_column_index=1, mask_width_ratio=0.40,
                                mask_height_ratio=0.40, out_path=None):

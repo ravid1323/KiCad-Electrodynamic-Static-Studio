@@ -929,19 +929,20 @@ class EMSimDialog(wx.Dialog):
                     continue
 
                 if isinstance(item, Track) or isinstance(item, ArcTrack):
-                    x1, y1 = item.start.x / 1_000_000.0, item.start.y / 1_000_000.0
-                    x2, y2 = item.end.x / 1_000_000.0, item.end.y / 1_000_000.0
-                    width_mm = item.width / 1_000_000.0
+                    x1 = round(item.start.x / 1_000_000.0, 4)
+                    y1 = round(item.start.y / 1_000_000.0, 4)
+                    x2 = round(item.end.x / 1_000_000.0, 4)
+                    y2 = round(item.end.y / 1_000_000.0, 4)
+                    width_mm = round(item.width / 1_000_000.0, 4)
                     layer_name = canonical_name(item.layer)
-
                     extracted_data[item_net_name]['tracks'].append({
                         "start_x": x1, "start_y": y1, "end_x": x2, "end_y": y2,
                         "width_mm": width_mm, "layer": layer_name
                     })
-
                 elif isinstance(item, Via):
-                    x, y = item.position.x / 1_000_000.0, item.position.y / 1_000_000.0
-                    size = item.diameter / 1_000_000.0
+                    x = round(item.position.x / 1_000_000.0, 4)
+                    y = round(item.position.y / 1_000_000.0, 4)
+                    size = round(item.diameter / 1_000_000.0, 4)
                     try:
                         s_layer = canonical_name(item.padstack.drill.start_layer)
                         e_layer = canonical_name(item.padstack.drill.end_layer)
@@ -960,8 +961,8 @@ class EMSimDialog(wx.Dialog):
 
                 elif isinstance(item, Pad):
                     if item.pad_type in [PadType.PT_PTH, PadType.PT_NPTH, PadType.PT_SMD]:
-                        x, y = item.position.x / 1_000_000.0, item.position.y / 1_000_000.0
-
+                        x = round(item.position.x / 1_000_000.0, 4)
+                        y = round(item.position.y / 1_000_000.0, 4)
                         pad_kiid = item.id.value if hasattr(item.id, 'value') else str(item.id)
                         fp_ref = pad_to_fp_ref.get(pad_kiid, "")
                         base_layer = pad_to_fp_layer.get(pad_kiid, "F.Cu")
@@ -993,14 +994,13 @@ class EMSimDialog(wx.Dialog):
                                         shape_name = PadStackShape.Name(cu_layer.shape)
                                         offset_x, offset_y = 0.0, 0.0
                                         if hasattr(cu_layer, 'offset'):
-                                            offset_x = cu_layer.offset.x / 1_000_000.0
-                                            offset_y = cu_layer.offset.y / 1_000_000.0
-
+                                            offset_x = round(cu_layer.offset.x / 1_000_000.0, 4)
+                                            offset_y = round(cu_layer.offset.y / 1_000_000.0, 4)
                                         pad_shapes.append({
                                             "layer": l_name,
                                             "shape": shape_name,
-                                            "size_x_mm": cu_layer.size.x / 1_000_000.0,
-                                            "size_y_mm": cu_layer.size.y / 1_000_000.0,
+                                            "size_x_mm": round(cu_layer.size.x / 1_000_000.0, 4),
+                                            "size_y_mm": round(cu_layer.size.y / 1_000_000.0, 4),
                                             "offset_x": offset_x,
                                             "offset_y": offset_y
                                         })
@@ -1037,22 +1037,30 @@ class EMSimDialog(wx.Dialog):
                             outline_pts = []
                             for n in poly.outline:
                                 if n.has_point:
-                                    outline_pts.append({"x": n.point.x / 1_000_000.0, "y": n.point.y / 1_000_000.0})
+                                    outline_pts.append({"x": round(n.point.x / 1_000_000.0, 4),
+                                                        "y": round(n.point.y / 1_000_000.0, 4)})
                                 elif n.has_arc:
-                                    outline_pts.append({"x": n.arc.start.x / 1_000_000.0, "y": n.arc.start.y / 1_000_000.0})
-                                    outline_pts.append({"x": n.arc.mid.x / 1_000_000.0, "y": n.arc.mid.y / 1_000_000.0})
-                                    outline_pts.append({"x": n.arc.end.x / 1_000_000.0, "y": n.arc.end.y / 1_000_000.0})
+                                    outline_pts.append({"x": round(n.arc.start.x / 1_000_000.0, 4),
+                                                        "y": round(n.arc.start.y / 1_000_000.0, 4)})
+                                    outline_pts.append({"x": round(n.arc.mid.x / 1_000_000.0, 4),
+                                                        "y": round(n.arc.mid.y / 1_000_000.0, 4)})
+                                    outline_pts.append({"x": round(n.arc.end.x / 1_000_000.0, 4),
+                                                        "y": round(n.arc.end.y / 1_000_000.0, 4)})
 
                             holes_data = []
                             for hole in poly.holes:
                                 hole_pts = []
                                 for n in hole:
                                     if n.has_point:
-                                        hole_pts.append({"x": n.point.x / 1_000_000.0, "y": n.point.y / 1_000_000.0})
+                                        hole_pts.append({"x": round(n.point.x / 1_000_000.0, 4),
+                                                         "y": round(n.point.y / 1_000_000.0, 4)})
                                     elif n.has_arc:
-                                        hole_pts.append({"x": n.arc.start.x / 1_000_000.0, "y": n.arc.start.y / 1_000_000.0})
-                                        hole_pts.append({"x": n.arc.mid.x / 1_000_000.0, "y": n.arc.mid.y / 1_000_000.0})
-                                        hole_pts.append({"x": n.arc.end.x / 1_000_000.0, "y": n.arc.end.y / 1_000_000.0})
+                                        hole_pts.append({"x": round(n.arc.start.x / 1_000_000.0, 4),
+                                                         "y": round(n.arc.start.y / 1_000_000.0, 4)})
+                                        hole_pts.append({"x": round(n.arc.mid.x / 1_000_000.0, 4),
+                                                         "y": round(n.arc.mid.y / 1_000_000.0, 4)})
+                                        hole_pts.append({"x": round(n.arc.end.x / 1_000_000.0, 4),
+                                                         "y": round(n.arc.end.y / 1_000_000.0, 4)})
                                 if hole_pts:
                                     holes_data.append(hole_pts)
 
@@ -1176,8 +1184,8 @@ class EMSimDialog(wx.Dialog):
                         ex, ey = shape.top_left.x, shape.top_left.y
                     if sx is not None and ex is not None:
                         edge_cuts_data.append({
-                            "start_x": sx / 1_000_000.0, "start_y": sy / 1_000_000.0,
-                            "end_x": ex / 1_000_000.0, "end_y": ey / 1_000_000.0
+                            "start_x": round(sx / 1_000_000.0, 4), "start_y": round(sy / 1_000_000.0, 4),
+                            "end_x": round(ex / 1_000_000.0, 4), "end_y": round(ey / 1_000_000.0, 4)
                         })
         except Exception as e:
             self.txt_output.AppendText(f"[!] Warning: Could not extract Edge.Cuts ({e})\n")
@@ -1232,7 +1240,7 @@ class EMSimDialog(wx.Dialog):
             return
 
         script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "solvers", "run_openems.py")
-        cmd = [sys.executable, script_path, self.last_export_path, "--run"]
+        cmd = [sys.executable, "-u", script_path, self.last_export_path, "--run"]
 
         try:
             num_physical_ports = sum(
@@ -1574,6 +1582,39 @@ class EyeDiagramConfigDialog(wx.Dialog):
         }
 
 
+class SPICEZinConfigDialog(wx.Dialog):
+    def __init__(self, parent):
+        super().__init__(parent, title="SPICE |Zin| Frequency Sweep", size=(350, 200))
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        grid = wx.FlexGridSizer(3, 2, 10, 10)
+
+        grid.Add(wx.StaticText(self, label="Start Frequency (Hz):"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.tc_start = wx.TextCtrl(self, value="1e6")
+        grid.Add(self.tc_start, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(self, label="Stop Frequency (Hz):"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.tc_stop = wx.TextCtrl(self, value="10e9")
+        grid.Add(self.tc_stop, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(self, label="Number of Points:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.tc_pts = wx.TextCtrl(self, value="1000")
+        grid.Add(self.tc_pts, 1, wx.EXPAND)
+
+        main_sizer.Add(grid, 1, wx.EXPAND | wx.ALL, 15)
+
+        btn_sizer = self.CreateButtonSizer(wx.OK | wx.CANCEL)
+        main_sizer.Add(btn_sizer, 0, wx.ALIGN_RIGHT | wx.ALL, 10)
+        self.SetSizer(main_sizer)
+
+    def get_values(self):
+        return {
+            "f_start": float(self.tc_start.GetValue()),
+            "f_stop": float(self.tc_stop.GetValue()),
+            "num_points": int(self.tc_pts.GetValue())
+        }
+
+
 class DCAnalysisTab(wx.Panel):
     def __init__(self, parent, main_app):
         super().__init__(parent)
@@ -1807,26 +1848,28 @@ class PostProcessingTab(wx.Panel):
 
         ctrl_sizer.Add(setup_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
-        # 2. SIGNAL INTEGRITY
-        si_box = wx.StaticBox(ctrl_panel, label=" 2. Signal Integrity (High-Frequency) ")
+        # 2. SIGNAL INTEGRITY & POWER INTEGRITY
+        si_box = wx.StaticBox(ctrl_panel, label=" 2. Signal Integrity and Power Integrity (High-Frequency) ")
         si_sizer = wx.StaticBoxSizer(si_box, wx.VERTICAL)
 
         # Increased rows to accommodate the 5th button
         si_grid = wx.GridSizer(3, 2, 5, 5)
 
+        btn_sparam = wx.Button(si_box, label="Plot S-Parameters")
         btn_tdr = wx.Button(si_box, label="Plot TDR Impedance")
         btn_xtalk = wx.Button(si_box, label="Plot Crosstalk")
         btn_zin = wx.Button(si_box, label="Plot Input |Zin|")
         btn_spice = wx.Button(si_box, label="Synthesize SPICE Model")
         btn_eye = wx.Button(si_box, label="Plot Eye Diagram (CSV)")
 
+        btn_sparam.Bind(wx.EVT_BUTTON, lambda e: self.dispatch_si("plot_s_params"))
         btn_tdr.Bind(wx.EVT_BUTTON, lambda e: self.dispatch_si("plot_tdr"))
         btn_xtalk.Bind(wx.EVT_BUTTON, lambda e: self.dispatch_si("plot_crosstalk"))
-        btn_zin.Bind(wx.EVT_BUTTON, lambda e: self.dispatch_si("plot_zin"))
+        btn_zin.Bind(wx.EVT_BUTTON, self.on_plot_zin_spice)
         btn_spice.Bind(wx.EVT_BUTTON, self.on_export_spice)
         btn_eye.Bind(wx.EVT_BUTTON, self.on_plot_eye_diagram)
 
-        si_grid.AddMany([btn_tdr, btn_xtalk, btn_zin, btn_spice, btn_eye])
+        si_grid.AddMany([btn_sparam, btn_tdr, btn_xtalk, btn_zin, btn_spice, btn_eye])
         si_sizer.Add(si_grid, 0, wx.EXPAND | wx.ALL, 5)
         ctrl_sizer.Add(si_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
@@ -1978,6 +2021,33 @@ class PostProcessingTab(wx.Panel):
         self.main_app.tab_report.add_image(self.current_plot_path)
         wx.MessageBox("Plot successfully added to the report queue!", "Added", wx.OK | wx.ICON_INFORMATION)
 
+    def on_plot_zin_spice(self, event):
+        with wx.FileDialog(self, "Select SPICE Transient CSV Export", wildcard="CSV Files (*.csv)|*.csv",
+                           style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as fileDialog:
+            if fileDialog.ShowModal() == wx.ID_CANCEL:
+                return
+            csv_path = fileDialog.GetPath()
+
+        dlg = SPICEZinConfigDialog(self)
+        if dlg.ShowModal() == wx.ID_OK:
+            params = dlg.get_values()
+            wx.BeginBusyCursor()
+            try:
+                out_png = csv_path.replace(os.path.splitext(csv_path)[1], "_zin.png")
+                post_processing.plot_spice_impedance_magnitude(
+                    csv_path,
+                    f_start=params["f_start"],
+                    f_stop=params["f_stop"],
+                    num_points=params["num_points"]
+                )
+                if os.path.exists(out_png):
+                    self.current_plot_path = out_png
+                    self.display_image(out_png)
+            except Exception as e:
+                wx.MessageBox(f"|Zin| Plotting Error: {e}", "Error", wx.OK | wx.ICON_ERROR)
+            wx.EndBusyCursor()
+        dlg.Destroy()
+
     def on_export_spice(self, event):
         sp_path, dc_json, _ = self.get_paths()
         if not sp_path or not os.path.exists(sp_path):
@@ -2044,12 +2114,12 @@ class PostProcessingTab(wx.Panel):
         wx.BeginBusyCursor()
         try:
             out_png = sp_path.replace(os.path.splitext(sp_path)[1], f"_{task}.png")
-            if task == "plot_tdr":
+            if task == "plot_s_params":
+                post_processing.plot_touchstone(sp_path)
+            elif task == "plot_tdr":
                 post_processing.export_tdr_impedance(sp_path)
             elif task == "plot_crosstalk":
                 post_processing.export_crosstalk(sp_path)
-            elif task == "plot_zin":
-                post_processing.plot_impedance_magnitude(sp_path)
 
             if os.path.exists(out_png):
                 self.current_plot_path = out_png

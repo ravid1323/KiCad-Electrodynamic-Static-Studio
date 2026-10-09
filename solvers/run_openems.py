@@ -38,6 +38,7 @@ from core.csx_handler import CSXGeometryLogger, ContinuousStructure, AppCSXCAD_B
 import openEMS
 from openEMS import ports
 from core.model_builder import *
+from analysis.post_processing import plot_touchstone
 
 # ==========================================
 # Touchstone Exporters
@@ -81,42 +82,6 @@ def export_network_to_touchstone(filepath, freq_hz, s_matrix_ports_first, z0=50.
     print(f"[*] Exported {net.nports}-Port Touchstone -> {filepath}")
     return net
 
-def plot_touchstone(filepath):
-    """Reads any Touchstone file (.s1p, .s2p, .s4p, .sNp) and plots S-parameters."""
-    if not HAS_MATPLOTLIB or not os.path.exists(filepath):
-        return
-
-    print(f"[*] Parsing and plotting Touchstone file: {filepath}")
-    try:
-        net = rf.Network(filepath)
-        plt.figure(figsize=(10, 6))
-
-        if net.nports == 1:
-            net.plot_s_db(m=0, n=0, label='S11 (Return Loss)')
-        elif net.nports == 2:
-            net.plot_s_db(m=0, n=0, label='S11 (Return Loss)', color='red')
-            net.plot_s_db(m=1, n=0, label='S21 (Insertion Loss)', color='blue')
-        elif net.nports == 4:
-            # Rigorous Mixed-Mode conversion (2 differential pairs)
-            net_mm = net.copy()
-            net_mm.se2gmm(p=2)
-            net_mm.plot_s_db(m=0, n=0, label='Sdd11 (Diff Return Loss)', color='red')
-            net_mm.plot_s_db(m=1, n=0, label='Sdd21 (Diff Insertion Loss)', color='blue')
-            net_mm.plot_s_db(m=2, n=2, label='Scc11 (Comm Return Loss)', color='orange', linestyle='--')
-        else:
-            net.plot_s_db()
-
-        plt.title(f'S-Parameters - {os.path.basename(filepath)}')
-        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
-        plt.legend(loc='best')
-        plt.tight_layout()
-
-        out_png = filepath + ".png"
-        plt.savefig(out_png)
-        print(f"[*] Plot successfully saved to {out_png}")
-        plt.show()
-    except Exception as e:
-        print(f"[!] Failed to parse Touchstone file via scikit-rf: {e}")
 
 
 def extrapolate_ar(signal, p_order=150, ext_length=100000):
@@ -203,33 +168,32 @@ def remove_abort_file(path):
             pass
 
 def run_single_port_worker(json_path, port_num, total_ports):
-    """
-    Isolated worker function to run the FDTD solver for a single port.
-    Spawns an independent engine, creates a dedicated sub-folder, and executes the math.
-    """
     print(f"[*] Executing FDTD Run {port_num} of {total_ports}")
-
-    # Initialize an independent engine
     engine = OpenEMSEngine(json_path)
 
-    # Create a mathematically isolated output folder
     port_dir = os.path.join(engine.config.sim_dir, f"run_port_{port_num}")
     os.makedirs(port_dir, exist_ok=True)
     engine.config.sim_dir = port_dir
 
-    # Build the 3D model, exciting ONLY this specific port
     engine.build_model(active_port=port_num)
 
-    # Run the C++ solver
+    # --- ADD FIELD DUMPS FOR PARAVIEW ---
+    z_min = min(engine.geometry.key_z_points)
+    z_max = max(engine.geometry.key_z_points)
+    start_box = [engine.config.board_min_x, engine.config.board_min_y, z_min]
+    stop_box = [engine.config.board_max_x, engine.config.board_max_y, z_max]
+
+    dump_e = engine.CSX.AddDump('E_Field', dump_type=0, file_type=1)
+    dump_e.AddBox(start_box, stop_box)
+
+    dump_h = engine.CSX.AddDump('H_Field', dump_type=1, file_type=1)
+    dump_h.AddBox(start_box, stop_box)
+
     remove_abort_file(port_dir)
     engine.FDTD.Run(port_dir, cleanup=True)
     remove_abort_file(port_dir)
 
-    # Return the path so the master thread knows where to find the raw voltage arrays
     return port_num, port_dir
-
-
-
 
 
 # ==========================================
@@ -1076,7 +1040,7 @@ if __name__ == "__main__":
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             creationflags = subprocess.CREATE_NO_WINDOW
-            cmd = ["wsl", "python3", script_path, json_arg]
+            cmd = ["wsl", "python3", "-u", script_path, json_arg]
             if args.run: cmd.append("--run")
             if args.info: cmd.append("--info")
             ret = subprocess.call(cmd,
