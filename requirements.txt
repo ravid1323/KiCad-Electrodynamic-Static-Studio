@@ -11,4 +11,3 @@ matplotlib
 pyvista
 sympy
 python-pptx
-signal
