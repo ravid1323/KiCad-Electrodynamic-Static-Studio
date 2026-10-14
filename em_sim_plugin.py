@@ -2356,18 +2356,85 @@ class ReportGeneratorTab(wx.Panel):
         except Exception as e:
             wx.MessageBox(f"Failed to save report: {e}", "Error", wx.OK | wx.ICON_ERROR)
 
+
 class SettingsTab(wx.Panel):
     def __init__(self, parent):
         super().__init__(parent)
         main_sizer = wx.BoxSizer(wx.VERTICAL)
 
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_scan = wx.Button(self, label="Scan System Dependencies")
         self.btn_scan.Bind(wx.EVT_BUTTON, self.on_scan)
-        main_sizer.Add(self.btn_scan, 0, wx.EXPAND | wx.ALL, 10)
+        btn_sizer.Add(self.btn_scan, 1, wx.EXPAND | wx.ALL, 5)
+
+        self.btn_update = wx.Button(self, label="Update Plugin & openEMS")
+        self.btn_update.SetBackgroundColour(wx.Colour(200, 230, 255))
+        self.btn_update.Bind(wx.EVT_BUTTON, self.on_update)
+        btn_sizer.Add(self.btn_update, 1, wx.EXPAND | wx.ALL, 5)
+
+        main_sizer.Add(btn_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
         self.txt_log = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
         main_sizer.Add(self.txt_log, 1, wx.EXPAND | wx.ALL, 5)
         self.SetSizer(main_sizer)
+
+    def on_update(self, event):
+        self.txt_log.Clear()
+        self.txt_log.AppendText("[*] Updating Plugin via Git...\n")
+        wx.Yield()  # Keep GUI responsive
+
+        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        try:
+            # Update the plugin repository itself
+            git_res = subprocess.run(["git", "pull"], cwd=plugin_dir, capture_output=True, text=True)
+            self.txt_log.AppendText(git_res.stdout)
+            if git_res.stderr:
+                self.txt_log.AppendText(git_res.stderr)
+        except Exception as e:
+            self.txt_log.AppendText(f"[!] Git pull failed: {e}\n")
+
+        wx.Yield()
+
+        # Check environment
+        is_linux = (os.name == 'posix')
+        is_wsl = False
+        if os.name == 'nt':
+            try:
+                wsl_check = subprocess.run(["wsl", "-l", "-v"], capture_output=True, text=True)
+                if wsl_check.returncode == 0:
+                    is_wsl = True
+            except FileNotFoundError:
+                pass
+
+        if is_linux or is_wsl:
+            self.txt_log.AppendText(
+                "\n[*] Linux/WSL detected. Attempting to upgrade openEMS (This may take several minutes)...\n")
+            wx.Yield()
+            wx.BeginBusyCursor()
+
+            # Safe bash script to check if the openEMS source exists, pull it, and rebuild
+            update_cmd = (
+                "if [ -d ~/openEMS-Project ]; then "
+                "cd ~/openEMS-Project && git pull && ./update_openEMS.sh ~/opt/openEMS --python; "
+                "else echo '[!] ~/openEMS-Project directory not found. Please update openEMS manually.'; fi"
+            )
+
+            try:
+                if is_wsl:
+                    res = subprocess.run(["wsl", "bash", "-c", update_cmd], capture_output=True, text=True)
+                else:
+                    res = subprocess.run(["bash", "-c", update_cmd], capture_output=True, text=True)
+
+                self.txt_log.AppendText(res.stdout)
+                if res.stderr:
+                    self.txt_log.AppendText(res.stderr)
+                self.txt_log.AppendText("\n[*] openEMS upgrade routine finished.\n")
+            except Exception as e:
+                self.txt_log.AppendText(f"\n[!] openEMS upgrade failed: {e}\n")
+            wx.EndBusyCursor()
+        else:
+            self.txt_log.AppendText(
+                "\n[*] Native Windows detected. Please download and install the latest openEMS .whl binaries manually.\n")
 
     def on_scan(self, event):
         self.txt_log.Clear()

@@ -295,17 +295,18 @@ class PortManager:
                 a = max(a, self.config.min_cell_size_mm)
                 b = max(b, self.config.min_cell_size_mm)
 
-                port = FDTD.AddRectWaveGuidePort(
-                    port_nr,
-                    p_start,
-                    p_stop,
-                    prop_dir,
-                    a=a,
-                    b=b,
-                    mode_name="TE10",
-                    excite=excite_val,
-                    priority=10000
-                )
+                try:
+                    # openEMS 0.37+
+                    port = ports.RectWGPort(
+                        self.CSX, port_nr, p_start, p_stop, prop_dir, a, b, "TE10",
+                        excite=excite_val, local_origin='corner', priority=10000
+                    )
+                except (TypeError, AttributeError):
+                    # openEMS 0.36 and older
+                    port = FDTD.AddRectWaveGuidePort(
+                        port_nr, p_start, p_stop, prop_dir, a=a, b=b,
+                        mode_name="TE10", excite=excite_val, priority=10000
+                    )
                 print(f"[*] Registered Port {port_nr} as RectWGPort (a={a:.3f}, b={b:.3f})")
 
 
@@ -640,7 +641,18 @@ class OpenEMSEngine:
             dummy_engine.build_model(active_port=active_port)
 
             for port in dummy_engine.port_mgr.ports_list:
-                port.CalcPort(port_dir, freq, ref_impedance=self.config.port_reference_impedance)
+                shift = float(self.config.raw_data.get("ref_plane_shift_mm", 0.0))
+                try:
+                    # openEMS 0.37+: Apply mathematical reference plane shift natively
+                    port.CalcPort(port_dir, freq, ref_impedance=self.config.port_reference_impedance,
+                                  ref_plane_shift=shift)
+                except TypeError:
+                    # openEMS 0.36 and older: Fallback (shift must be ignored)
+                    if shift != 0.0:
+                        print(
+                            f"[!] Warning: openEMS v0.37+ required for post-process de-embedding. Ignoring shift={shift}mm.")
+                    port.CalcPort(port_dir, freq, ref_impedance=self.config.port_reference_impedance)
+
                 if self.config.raw_data.get("use_ar_filter", False):
                     ar_steps = self.config.raw_data.get("ar_extrap_steps", 100000)
 
@@ -719,7 +731,18 @@ class OpenEMSEngine:
         f_start = freq_array[0]
 
         for p in self.port_mgr.ports_list:
-            p.CalcPort(self.config.sim_dir, freq_array, ref_impedance=self.config.port_reference_impedance)
+            shift = float(self.config.raw_data.get("ref_plane_shift_mm", 0.0))
+            try:
+                # openEMS 0.37+: Apply mathematical reference plane shift natively
+                p.CalcPort(self.config.sim_dir, freq_array, ref_impedance=self.config.port_reference_impedance,
+                           ref_plane_shift=shift)
+            except TypeError:
+                # openEMS 0.36 and older: Fallback (shift must be ignored)
+                if shift != 0.0:
+                    print(
+                        f"[!] Warning: openEMS v0.37+ required for post-process de-embedding. Ignoring shift={shift}mm.")
+                p.CalcPort(self.config.sim_dir, freq_array, ref_impedance=self.config.port_reference_impedance)
+
             if self.config.raw_data.get("use_ar_filter", True):
                 ar_steps = self.config.raw_data.get("ar_extrap_steps", 100000)
 

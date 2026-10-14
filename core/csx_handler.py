@@ -3,10 +3,26 @@ from CSXCAD import AppCSXCAD_BIN
 from CSXCAD.CSXCAD import ContinuousStructure
 import numpy as np
 
-dll_path = r'C:\openEMS'
-if os.path.exists(dll_path):
-    os.add_dll_directory(dll_path)
-    os.environ['PATH'] = dll_path + os.pathsep + os.environ.get('PATH', '')
+csxcad_env = os.environ.get('CSXCAD_INSTALL_PATH', os.environ.get('OPENEMS_INSTALL_PATH', ''))
+
+# Check the new env variable first, then fall back to standard historical Windows installation paths
+possible_paths = [csxcad_env, r'C:\openEMS', r'C:\opt\openEMS']
+
+for dll_path in possible_paths:
+    if dll_path and os.path.exists(dll_path):
+        if hasattr(os, 'add_dll_directory'):
+            try:
+                os.add_dll_directory(dll_path)
+                bin_dir = os.path.join(dll_path, 'bin')
+                if os.path.exists(bin_dir):
+                    os.add_dll_directory(bin_dir)
+            except Exception:
+                pass
+
+        bin_dir = os.path.join(dll_path, 'bin')
+        extra_paths = f"{dll_path}{os.pathsep}{bin_dir}" if os.path.exists(bin_dir) else dll_path
+        os.environ['PATH'] = extra_paths + os.pathsep + os.environ.get('PATH', '')
+        break
 
 class PropertyWrapper:
     """Wraps CSXCAD properties (Metal, Material, etc.) to log geometry primitives."""
