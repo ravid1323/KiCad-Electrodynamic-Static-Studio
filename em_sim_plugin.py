@@ -2379,62 +2379,116 @@ class SettingsTab(wx.Panel):
         self.SetSizer(main_sizer)
 
     def on_update(self, event):
-        self.txt_log.Clear()
-        self.txt_log.AppendText("[*] Updating Plugin via Git...\n")
-        wx.Yield()  # Keep GUI responsive
-
-        plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        try:
-            # Update the plugin repository itself
-            git_res = subprocess.run(["git", "pull"], cwd=plugin_dir, capture_output=True, text=True)
-            self.txt_log.AppendText(git_res.stdout)
-            if git_res.stderr:
-                self.txt_log.AppendText(git_res.stderr)
-        except Exception as e:
-            self.txt_log.AppendText(f"[!] Git pull failed: {e}\n")
-
-        wx.Yield()
-
-        # Check environment
+        # 1. Check environment on the main thread first
         is_linux = (os.name == 'posix')
         is_wsl = False
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+
         if os.name == 'nt':
             try:
-                wsl_check = subprocess.run(["wsl", "-l", "-v"], capture_output=True, text=True)
+                wsl_check = subprocess.run(["wsl", "-l", "-v"], capture_output=True, text=True,
+                                           creationflags=creationflags)
                 if wsl_check.returncode == 0:
                     is_wsl = True
             except FileNotFoundError:
                 pass
 
+        # 2. Prompt for Sudo Password before locking the GUI
+        sudo_pwd = ""
         if is_linux or is_wsl:
-            self.txt_log.AppendText(
-                "\n[*] Linux/WSL detected. Attempting to upgrade openEMS (This may take several minutes)...\n")
-            wx.Yield()
-            wx.BeginBusyCursor()
-
-            # Safe bash script to check if the openEMS source exists, pull it, and rebuild
-            update_cmd = (
-                "if [ -d ~/openEMS-Project ]; then "
-                "cd ~/openEMS-Project && git pull && ./update_openEMS.sh ~/opt/openEMS --python; "
-                "else echo '[!] ~/openEMS-Project directory not found. Please update openEMS manually.'; fi"
+            dlg = wx.PasswordEntryDialog(
+                self,
+                "Enter your Linux/WSL password to install missing openEMS dependencies.\n(Leave blank if your user has passwordless sudo)",
+                "Root Password Required"
             )
+            if dlg.ShowModal() == wx.ID_OK:
+                sudo_pwd = dlg.GetValue()
+            else:
+                dlg.Destroy()
+                return  # Abort the update entirely if the user clicks Cancel
+            dlg.Destroy()
+
+        self.btn_update.Disable()
+        self.txt_log.Clear()
+        self.txt_log.AppendText("[*] Updating Plugin via Git...\n")
+
+        # 3. Execute the heavy lifting in a background thread
+        def _update_task():
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
 
             try:
-                if is_wsl:
-                    res = subprocess.run(["wsl", "bash", "-c", update_cmd], capture_output=True, text=True)
-                else:
-                    res = subprocess.run(["bash", "-c", update_cmd], capture_output=True, text=True)
-
-                self.txt_log.AppendText(res.stdout)
-                if res.stderr:
-                    self.txt_log.AppendText(res.stderr)
-                self.txt_log.AppendText("\n[*] openEMS upgrade routine finished.\n")
+                git_res = subprocess.run(["git", "pull"], cwd=plugin_dir, capture_output=True, text=True,
+                                         creationflags=creationflags)
+                wx.CallAfter(self.txt_log.AppendText, git_res.stdout)
+                if git_res.stderr:
+                    wx.CallAfter(self.txt_log.AppendText, git_res.stderr)
             except Exception as e:
-                self.txt_log.AppendText(f"\n[!] openEMS upgrade failed: {e}\n")
-            wx.EndBusyCursor()
-        else:
-            self.txt_log.AppendText(
-                "\n[*] Native Windows detected. Please download and install the latest openEMS .whl binaries manually.\n")
+                wx.CallAfter(self.txt_log.AppendText, f"[!] Git pull failed: {e}\n")
+
+            if is_linux or is_wsl:
+                wx.CallAfter(self.txt_log.AppendText,
+                             "\n[*] Linux/WSL detected. Attempting to upgrade openEMS (This may take several minutes)...\n")
+
+                # Safely escape single quotes in the password for the bash command
+                sudo_pwd_escaped = sudo_pwd.replace("'", "'\\''")
+
+                # Pre-authenticate sudo (-S reads from stdin, -v updates the cached credentials)
+                sudo_auth = f"echo '{sudo_pwd_escaped}' | sudo -S -v && " if sudo_pwd else ""
+
+                update_cmd = (
+                    "if [ -d ~/openEMS-Project ]; then "
+                    "cd ~/openEMS-Project && git pull && "
+                    f"{sudo_auth}"
+                    "./scripts/install_deps.sh --install --python && "
+                    "./update_openEMS.sh ~/opt/openEMS --python; "
+                    "else echo '[!] ~/openEMS-Project directory not found. Please update openEMS manually.'; fi"
+                )
+
+                try:
+                    cmd_list = ["wsl", "bash", "-c", update_cmd] if is_wsl else ["bash", "-c", update_cmd]
+
+                    process = subprocess.Popen(
+                        cmd_list,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        universal_newlines=True,
+                        encoding='utf-8',
+                        errors='replace',
+                        creationflags=creationflags
+                    )
+
+                    buffer = []
+                    last_flush = time.time()
+
+                    while True:
+                        line = process.stdout.readline()
+
+                        # Break loop if process is dead and no more lines exist
+                        if not line and process.poll() is not None:
+                            if buffer:
+                                wx.CallAfter(self.txt_log.AppendText, "".join(buffer))
+                            break
+
+                        if line:
+                            buffer.append(line)
+                            # Flush buffer to GUI every 0.1s or 100 lines to prevent Event Loop freezing
+                            if time.time() - last_flush > 0.1 or len(buffer) > 100:
+                                wx.CallAfter(self.txt_log.AppendText, "".join(buffer))
+                                buffer = []
+                                last_flush = time.time()
+
+                    process.wait()
+                    wx.CallAfter(self.txt_log.AppendText, "\n[*] openEMS upgrade routine finished.\nPlease restart the plugin.\n")
+
+                except Exception as e:
+                    wx.CallAfter(self.txt_log.AppendText, f"\n[!] openEMS upgrade failed: {e}\n")
+            else:
+                wx.CallAfter(self.txt_log.AppendText,
+                             "\n[*] Native Windows detected. Please download and install the latest openEMS .whl binaries manually.\n")
+
+            wx.CallAfter(self.btn_update.Enable)
+
+        threading.Thread(target=_update_task, daemon=True).start()
 
     def on_scan(self, event):
         self.txt_log.Clear()
