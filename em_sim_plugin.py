@@ -2378,8 +2378,55 @@ class SettingsTab(wx.Panel):
         main_sizer.Add(self.txt_log, 1, wx.EXPAND | wx.ALL, 5)
         self.SetSizer(main_sizer)
 
+    def on_scan(self, event):
+        self.btn_scan.Disable()
+        self.txt_log.Clear()
+        self.txt_log.AppendText("[*] Scanning system dependencies...\n")
+
+        # Run scanner in a background thread to prevent GUI freezing
+        def _scan_task():
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+
+            # Check openEMS Native
+            openems_path = shutil.which("openEMS")
+            wx.CallAfter(self.txt_log.AppendText, f"[+] openEMS Binary: {'Found' if openems_path else 'Missing'}\n")
+
+            if openems_path:
+                # Thread-safe wrapper for the legacy openems_locator function
+                class SafeLogger:
+                    def __init__(self, txt_ctrl):
+                        self.txt_ctrl = txt_ctrl
+
+                    def AppendText(self, text):
+                        wx.CallAfter(self.txt_ctrl.AppendText, text)
+
+                openems_locator(SafeLogger(self.txt_log))
+
+            # Check ParaView
+            paraview_path = shutil.which("paraview")
+            wx.CallAfter(self.txt_log.AppendText, f"[+] ParaView: {'Found' if paraview_path else 'Missing'}\n")
+
+            # Check WSL
+            if os.name == 'nt':
+                try:
+                    wsl_check = subprocess.run(["wsl", "-l", "-v"], capture_output=True, text=True,
+                                               creationflags=creationflags)
+                    if wsl_check.returncode == 0:
+                        wx.CallAfter(self.txt_log.AppendText, "[+] WSL: Installed\n")
+                        # Check Python inside WSL
+                        wsl_py = subprocess.run(["wsl", "python3", "-c", "import openEMS"], capture_output=True,
+                                                creationflags=creationflags)
+                        wx.CallAfter(self.txt_log.AppendText,
+                                     f"  -> openEMS Python Module (WSL): {'Found' if wsl_py.returncode == 0 else 'Missing'}\n")
+                except FileNotFoundError:
+                    wx.CallAfter(self.txt_log.AppendText, "[-] WSL: Not Found\n")
+
+            wx.CallAfter(self.txt_log.AppendText, "\n[*] Scan complete.\n")
+            wx.CallAfter(self.btn_scan.Enable)
+
+        threading.Thread(target=_scan_task, daemon=True).start()
+
     def on_update(self, event):
-        # 1. Check environment on the main thread first
         is_linux = (os.name == 'posix')
         is_wsl = False
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
@@ -2393,7 +2440,6 @@ class SettingsTab(wx.Panel):
             except FileNotFoundError:
                 pass
 
-        # 2. Prompt for Sudo Password before locking the GUI
         sudo_pwd = ""
         if is_linux or is_wsl:
             dlg = wx.PasswordEntryDialog(
@@ -2405,14 +2451,13 @@ class SettingsTab(wx.Panel):
                 sudo_pwd = dlg.GetValue()
             else:
                 dlg.Destroy()
-                return  # Abort the update entirely if the user clicks Cancel
+                return
             dlg.Destroy()
 
         self.btn_update.Disable()
         self.txt_log.Clear()
         self.txt_log.AppendText("[*] Updating Plugin via Git...\n")
 
-        # 3. Execute the heavy lifting in a background thread
         def _update_task():
             plugin_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -2429,10 +2474,7 @@ class SettingsTab(wx.Panel):
                 wx.CallAfter(self.txt_log.AppendText,
                              "\n[*] Linux/WSL detected. Attempting to upgrade openEMS (This may take several minutes)...\n")
 
-                # Safely escape single quotes in the password for the bash command
                 sudo_pwd_escaped = sudo_pwd.replace("'", "'\\''")
-
-                # Pre-authenticate sudo (-S reads from stdin, -v updates the cached credentials)
                 sudo_auth = f"echo '{sudo_pwd_escaped}' | sudo -S -v && " if sudo_pwd else ""
 
                 update_cmd = (
@@ -2463,7 +2505,6 @@ class SettingsTab(wx.Panel):
                     while True:
                         line = process.stdout.readline()
 
-                        # Break loop if process is dead and no more lines exist
                         if not line and process.poll() is not None:
                             if buffer:
                                 wx.CallAfter(self.txt_log.AppendText, "".join(buffer))
@@ -2471,7 +2512,6 @@ class SettingsTab(wx.Panel):
 
                         if line:
                             buffer.append(line)
-                            # Flush buffer to GUI every 0.1s or 100 lines to prevent Event Loop freezing
                             if time.time() - last_flush > 0.1 or len(buffer) > 100:
                                 wx.CallAfter(self.txt_log.AppendText, "".join(buffer))
                                 buffer = []
@@ -2489,35 +2529,6 @@ class SettingsTab(wx.Panel):
             wx.CallAfter(self.btn_update.Enable)
 
         threading.Thread(target=_update_task, daemon=True).start()
-
-    def on_scan(self, event):
-        self.txt_log.Clear()
-
-        # Check openEMS Native
-        openems_path = shutil.which("openEMS")
-        self.txt_log.AppendText(f"[+] openEMS Binary: {'Found' if openems_path else 'Missing'}\n")
-
-        if openems_path:
-            openems_locator(self.txt_log)
-
-        # Check ParaView
-        paraview_path = shutil.which("paraview")
-        self.txt_log.AppendText(f"[+] ParaView: {'Found' if paraview_path else 'Missing'}\n")
-
-        # Check WSL
-        try:
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            creationflags = subprocess.CREATE_NO_WINDOW
-            wsl_check = subprocess.run(["wsl", "-l", "-v"], capture_output=True, text=True)
-            if wsl_check.returncode == 0:
-                self.txt_log.AppendText("[+] WSL: Installed\n")
-                # Check Python inside WSL
-                wsl_py = subprocess.run(["wsl", "python3", "-c", r'"import openEMS"'], capture_output=True)
-                self.txt_log.AppendText(
-                    f"  -> openEMS Python Module (WSL): {'Found' if wsl_py.returncode == 0 else 'Missing'}\n")
-        except FileNotFoundError:
-            self.txt_log.AppendText("[-] WSL: Not Found\n")
 
 class NetManagerTab(wx.Panel):
     def __init__(self, parent, board):
